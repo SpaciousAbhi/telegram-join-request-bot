@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 import re
-from pyrogram import Client, filters, raw
+from pyrogram import Client, filters, raw, ContinuePropagation
 from pyrogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, 
     InlineKeyboardButton, ChatMemberUpdated
@@ -218,66 +218,90 @@ async def broadcast_worker(client: Client, owner_id: int, message_to_copy: Messa
     await client.send_message(owner_id, final_report)
     BROADCAST_STATUS["is_running"] = False
 
+# ----------------- Message Logging Handler (Pre-propagation) -----------------
+
+@app.on_message(filters.private, group=-1)
+async def log_private_message(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    text_content = message.text or "[Non-text message]"
+    logger.info(f"📩 RECEIVED PRIVATE MESSAGE: user_id={user_id}, text='{text_content}'")
+    raise ContinuePropagation
+
 # ----------------- Start Handler -----------------
 
 @app.on_message(filters.command("start") & filters.private)
 async def handle_start(client: Client, message: Message):
     user_id = message.from_user.id
     username = message.from_user.username
+    logger.info(f"🚀 Handling /start command for user_id={user_id}, username={username}")
     
-    # 1. Register User in Database
-    await database.add_user(user_id, username)
-    user_db = await database.get_user(user_id)
-    
-    if user_db["is_banned"] == 1:
-        await message.reply_text("❌ 𝗬𝗼𝘂 𝗮𝗿𝗲 𝗯𝗮𝗻𝗻𝗲𝗱 from using this bot.")
-        return
+    try:
+        # 1. Register User in Database
+        await database.add_user(user_id, username)
+        logger.info(f"✅ User {user_id} registered/updated in database.")
         
-    # Check if there's a payload
-    payload = ""
-    if len(message.command) > 1:
-        payload = message.command[1]
+        user_db = await database.get_user(user_id)
+        logger.info(f"👤 User database profile: {user_db}")
         
-    # 2. Check for Verification Payload (e.g. verify_CHATID)
-    if payload.startswith("verify_"):
-        try:
-            # Parse chat ID from payload
-            parts = payload.split("_")
-            chat_id = int(parts[1])
+        if user_db["is_banned"] == 1:
+            logger.warning(f"🚫 Banned user {user_id} tried to use /start.")
+            await message.reply_text("❌ 𝗬𝗼𝘂 𝗮𝗿𝗲 𝗯𝗮𝗻𝗻𝗲𝗱 from using this bot.")
+            return
+        
+        # Check if there's a payload
+        payload = ""
+        if len(message.command) > 1:
+            payload = message.command[1]
+            logger.info(f"📦 Start payload found: {payload}")
             
-            # Verify user in database
-            await database.set_user_verified(user_id, True)
-            
-            # Retrieve chat details
-            chat_details = await database.get_chat(chat_id)
-            chat_title = chat_details["chat_title"] if chat_details else f"Chat {chat_id}"
-            
-            # Approve pending request
+        # 2. Check for Verification Payload (e.g. verify_CHATID)
+        if payload.startswith("verify_"):
             try:
-                await client.approve_chat_join_request(chat_id, user_id)
-                await database.increment_chat_approvals(chat_id)
-                await database.set_setting(f"pending_req_{chat_id}_{user_id}", "0")
+                # Parse chat ID from payload
+                parts = payload.split("_")
+                chat_id = int(parts[1])
+                logger.info(f"🔒 Handling verification for user_id={user_id} in chat_id={chat_id}")
                 
-                success_msg = localization.get_text("verify_success", user_db["lang"] or "en", chat_title=chat_title)
-                await message.reply_text(success_msg)
+                # Verify user in database
+                await database.set_user_verified(user_id, True)
+                
+                # Retrieve chat details
+                chat_details = await database.get_chat(chat_id)
+                chat_title = chat_details["chat_title"] if chat_details else f"Chat {chat_id}"
+                
+                # Approve pending request
+                try:
+                    await client.approve_chat_join_request(chat_id, user_id)
+                    await database.increment_chat_approvals(chat_id)
+                    await database.set_setting(f"pending_req_{chat_id}_{user_id}", "0")
+                    
+                    success_msg = localization.get_text("verify_success", user_db["lang"] or "en", chat_title=chat_title)
+                    await message.reply_text(success_msg)
+                    logger.info(f"✅ Auto-approved request for verified user {user_id} in chat {chat_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to approve request after verification: {e}")
+                    await message.reply_text("❌ Verification successful but failed to approve request automatically. Please notify the admin.")
             except Exception as e:
-                logger.error(f"Failed to approve request after verification: {e}")
-                await message.reply_text("❌ Verification successful but failed to approve request automatically. Please notify the admin.")
-        except Exception as e:
-            logger.error(f"Error handling verification payload: {e}")
-            await message.reply_text("❌ Invalid verification link.")
-        return
-        
-    # 3. Normal /start Flow (Check Force Sub)
-    passed_fsub = await handle_fsub_check(client, user_id, user_id)
-    if not passed_fsub:
-        return
-        
-    # 4. Language Selection Flow
-    if not user_db["lang"]:
-        await show_language_selection(client, user_id)
-    else:
-        await show_main_menu(client, user_id, user_db["lang"])
+                logger.error(f"❌ Error handling verification payload: {e}")
+                await message.reply_text("❌ Invalid verification link.")
+            return
+            
+        # 3. Normal /start Flow (Check Force Sub)
+        logger.info(f"⏳ Checking Force Subscription for user_id={user_id}")
+        passed_fsub = await handle_fsub_check(client, user_id, user_id)
+        if not passed_fsub:
+            logger.info(f"⚠️ User {user_id} failed force subscription check.")
+            return
+            
+        # 4. Language Selection Flow
+        if not user_db["lang"]:
+            logger.info(f"🌐 Prompting language selection for user_id={user_id}")
+            await show_language_selection(client, user_id)
+        else:
+            logger.info(f"🏠 Showing main menu to user_id={user_id} with lang={user_db['lang']}")
+            await show_main_menu(client, user_id, user_db["lang"])
+    except Exception as e:
+        logger.exception(f"💥 Exception in handle_start for user_id={user_id}: {e}")
 
 # ----------------- Chat Join Request Handler -----------------
 
@@ -455,15 +479,20 @@ async def handle_my_chat_member(client: Client, update: ChatMemberUpdated):
             except Exception:
                 pass
 
-# ----------------- Command Handlers (Owner) -----------------
-
 @app.on_message(filters.command("admin") & filters.private)
 async def handle_admin_cmd(client: Client, message: Message):
     user_id = message.from_user.id
-    if not utils.is_owner(user_id):
-        return
-        
-    await show_owner_panel(client, user_id)
+    logger.info(f"👑 Handling /admin command for user_id={user_id}")
+    
+    try:
+        if not utils.is_owner(user_id):
+            logger.warning(f"⚠️ Non-owner user {user_id} attempted to access /admin.")
+            return
+            
+        logger.info(f"🔓 Access granted to owner {user_id} for admin panel.")
+        await show_owner_panel(client, user_id)
+    except Exception as e:
+        logger.exception(f"💥 Exception in handle_admin_cmd: {e}")
 
 async def show_owner_panel(client: Client, user_id: int):
     """Sends the admin/owner control panel."""
