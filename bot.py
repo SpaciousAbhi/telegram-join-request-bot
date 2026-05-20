@@ -33,15 +33,18 @@ USER_STATES = {}
 # Format: {"is_running": False, "task": None}
 BROADCAST_STATUS = {"is_running": False, "task": None}
 
-# Initialize Client — in_memory=True prevents .session file conflicts between
-# local and Heroku instances competing for the same long-poll connection.
+# Initialize Client — use a persistent session_string so Telegram always
+# delivers updates to the same auth key across Heroku dyno restarts.
+# (in_memory=True was discarding the auth key on every restart, causing
+#  Telegram to silently stop delivering updates to the new ephemeral session.)
 app = Client(
     name="telegram_join_request_bot",
     api_id=config.API_ID,
     api_hash=config.API_HASH,
     bot_token=config.BOT_TOKEN,
-    in_memory=True
+    session_string=config.SESSION_STRING,
 )
+
 
 # ----------------- Helper Functions -----------------
 
