@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 import re
-from pyrogram import Client, filters, raw, ContinuePropagation
+from pyrogram import Client, filters, raw
 from pyrogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, 
     InlineKeyboardButton, ChatMemberUpdated
@@ -219,15 +219,6 @@ async def broadcast_worker(client: Client, owner_id: int, message_to_copy: Messa
     )
     await client.send_message(owner_id, final_report)
     BROADCAST_STATUS["is_running"] = False
-
-# ----------------- Message Logging Handler (Pre-propagation) -----------------
-
-@app.on_message(filters.private, group=-1)
-async def log_private_message(client: Client, message: Message):
-    user_id = message.from_user.id if message.from_user else 0
-    text_content = message.text or "[Non-text message]"
-    logger.info(f"📩 RECEIVED PRIVATE MESSAGE: user_id={user_id}, text='{text_content}'")
-    raise ContinuePropagation
 
 # ----------------- Start Handler -----------------
 
@@ -1296,39 +1287,25 @@ async def main():
     # 1. Initialize Database
     await database.init_db()
     
-    # 2. Start Pyrogram Client
     logger.info("Starting Telegram Join Request Bot...")
-    await app.start()
     
-    # 3. Drop all pending/stale updates accumulated while the bot was offline.
-    # This prevents old messages from being processed and causing confusion.
-    try:
-        await app.invoke(raw.functions.messages.GetHistory(
-            peer=await app.resolve_peer("me"),
-            offset_id=0, offset_date=0, add_offset=0,
-            limit=0, max_id=0, min_id=0, hash=0
-        ))
-    except Exception:
-        pass
-    # Use updates.getState to acknowledge all pending updates (flush queue)
-    try:
-        await app.invoke(raw.functions.updates.GetState())
-        logger.info("Pending updates flushed successfully.")
-    except Exception as e:
-        logger.warning(f"Could not flush pending updates: {e}")
-    
-    # 4. Report successful startup
-    bot_info = await app.get_me()
-    logger.info(f"Bot successfully started: @{bot_info.username}")
-    
-    # Print warning if credentials are not configured properly
-    if not config.is_configured():
-        logger.warning("Bot is NOT fully configured! Please verify API_ID, API_HASH, BOT_TOKEN, and OWNER_ID in .env.")
+    # 2. Use async-with context manager — the canonical Pyrogram pattern.
+    # This correctly initialises the update dispatch loop before any updates
+    # are consumed, avoiding the race-condition that caused the bot to connect
+    # but never receive messages.
+    async with app:
+        bot_info = await app.get_me()
+        logger.info(f"✅ Bot successfully started: @{bot_info.username}")
         
-    await asyncio.Event().wait()
+        if not config.is_configured():
+            logger.warning("Bot is NOT fully configured! Check API_ID, API_HASH, BOT_TOKEN, OWNER_ID.")
+        
+        # Block forever — updates are dispatched by Pyrogram in the background
+        await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user.")
+
