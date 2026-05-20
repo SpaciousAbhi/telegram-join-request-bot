@@ -33,12 +33,14 @@ USER_STATES = {}
 # Format: {"is_running": False, "task": None}
 BROADCAST_STATUS = {"is_running": False, "task": None}
 
-# Initialize Client
+# Initialize Client — in_memory=True prevents .session file conflicts between
+# local and Heroku instances competing for the same long-poll connection.
 app = Client(
     name="telegram_join_request_bot",
     api_id=config.API_ID,
     api_hash=config.API_HASH,
-    bot_token=config.BOT_TOKEN
+    bot_token=config.BOT_TOKEN,
+    in_memory=True
 )
 
 # ----------------- Helper Functions -----------------
@@ -1298,7 +1300,24 @@ async def main():
     logger.info("Starting Telegram Join Request Bot...")
     await app.start()
     
-    # Keep it running
+    # 3. Drop all pending/stale updates accumulated while the bot was offline.
+    # This prevents old messages from being processed and causing confusion.
+    try:
+        await app.invoke(raw.functions.messages.GetHistory(
+            peer=await app.resolve_peer("me"),
+            offset_id=0, offset_date=0, add_offset=0,
+            limit=0, max_id=0, min_id=0, hash=0
+        ))
+    except Exception:
+        pass
+    # Use updates.getState to acknowledge all pending updates (flush queue)
+    try:
+        await app.invoke(raw.functions.updates.GetState())
+        logger.info("Pending updates flushed successfully.")
+    except Exception as e:
+        logger.warning(f"Could not flush pending updates: {e}")
+    
+    # 4. Report successful startup
     bot_info = await app.get_me()
     logger.info(f"Bot successfully started: @{bot_info.username}")
     
