@@ -1,0 +1,17 @@
+# Environmental Variables
+.env
+
+# Python Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Databases & local logs
+*.db
+*.log
+
+# Editor configurations
+.vscode/
+.idea/
