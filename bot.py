@@ -341,8 +341,20 @@ async def handle_join_request(client: Client, join_request):
 
 # ----------------- Bot Connection (my_chat_member) Handler -----------------
 
-@app.on_my_chat_member()
+@app.on_chat_member_updated()
 async def handle_my_chat_member(client: Client, update: ChatMemberUpdated):
+    bot_id = client.me.id
+    
+    # We only care about updates regarding the bot itself
+    target_user = None
+    if update.new_chat_member:
+        target_user = update.new_chat_member.user
+    elif update.old_chat_member:
+        target_user = update.old_chat_member.user
+        
+    if not target_user or target_user.id != bot_id:
+        return
+
     chat = update.chat
     new_member = update.new_chat_member
     old_member = update.old_chat_member
