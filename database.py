@@ -14,14 +14,20 @@ async def init_db():
     global client, db
     
     if not config.MONGO_DB_URI:
-        logger.error("MONGO_DB_URI is not set! Cannot initialize database connection.")
-        return
+        logger.error("MONGO_DB_URI is not set. Database features are disabled for this boot.")
+        return False
         
     try:
-        # Initialize Motor Async Client
-        client = AsyncIOMotorClient(config.MONGO_DB_URI)
+        # Keep startup responsive. If Atlas is down or the URI is wrong, the
+        # bot should still come online and answer /start instead of hanging.
+        client = AsyncIOMotorClient(
+            config.MONGO_DB_URI,
+            serverSelectionTimeoutMS=8000,
+            connectTimeoutMS=8000,
+        )
         # Retrieves DB specified in URI or falls back to 'telegram_bot'
         db = client.get_default_database("telegram_bot")
+        await db.command("ping")
         logger.info("MongoDB client connected successfully.")
         
         # Seed default settings
@@ -39,9 +45,12 @@ async def init_db():
                 upsert=True
             )
         logger.info("Default settings seeded successfully.")
+        return True
     except Exception as e:
-        logger.error(f"Failed to initialize MongoDB database: {e}")
-        raise e
+        logger.exception(f"Failed to initialize MongoDB database: {e}")
+        client = None
+        db = None
+        return False
 
 # User Operations
 async def get_user(user_id: int):

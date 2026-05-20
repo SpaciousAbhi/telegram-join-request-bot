@@ -33,16 +33,15 @@ USER_STATES = {}
 # Format: {"is_running": False, "task": None}
 BROADCAST_STATUS = {"is_running": False, "task": None}
 
-# Initialize Client — use a persistent session_string so Telegram always
-# delivers updates to the same auth key across Heroku dyno restarts.
-# (in_memory=True was discarding the auth key on every restart, causing
-#  Telegram to silently stop delivering updates to the new ephemeral session.)
+# Initialize the bot from the current BotFather token on every boot.
+# A baked session string or stale .session file can authenticate as an old bot
+# session and make /start or /admin look completely dead after token changes.
 app = Client(
     name="telegram_join_request_bot",
     api_id=config.API_ID,
     api_hash=config.API_HASH,
     bot_token=config.BOT_TOKEN,
-    session_string=config.SESSION_STRING,
+    in_memory=True,
 )
 
 
@@ -1287,10 +1286,19 @@ async def handle_callbacks(client: Client, callback_query: CallbackQuery):
 # ----------------- Startup / Main Loop -----------------
 
 async def main():
-    # 1. Initialize Database
-    await database.init_db()
-    
+    missing = config.missing_required_config()
+    if config.BOT_TOKEN == "":
+        raise RuntimeError("BOT_TOKEN is missing. Set the current token from @BotFather before starting the worker.")
+    if config.OWNER_ID == 0:
+        logger.warning("OWNER_ID is missing or invalid. /admin will deny everyone until OWNER_ID is set.")
+    if config.MONGO_DB_URI == "":
+        logger.warning("MONGO_DB_URI is missing. The bot will answer, but saved users/chats/settings are disabled.")
+
     logger.info("Starting Telegram Join Request Bot...")
+
+    db_ready = await database.init_db()
+    if not db_ready:
+        logger.warning("Database is not ready. Continuing so /start and /admin can still respond with limited data.")
     
     # 2. Use async-with context manager — the canonical Pyrogram pattern.
     # This correctly initialises the update dispatch loop before any updates
@@ -1300,8 +1308,8 @@ async def main():
         bot_info = await app.get_me()
         logger.info(f"✅ Bot successfully started: @{bot_info.username}")
         
-        if not config.is_configured():
-            logger.warning("Bot is NOT fully configured! Check API_ID, API_HASH, BOT_TOKEN, OWNER_ID.")
+        if missing:
+            logger.warning("Bot is missing config vars: %s", ", ".join(missing))
         
         # Block forever — updates are dispatched by Pyrogram in the background
         await asyncio.Event().wait()

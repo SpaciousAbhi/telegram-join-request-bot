@@ -34,11 +34,19 @@ You can deploy using the Heroku Dashboard:
    - `BOT_TOKEN`: Your Telegram Bot Token from `@BotFather`.
    - `OWNER_ID`: Your numeric Telegram user ID (the main owner).
    - `MONGO_DB_URI`: Your MongoDB connection string.
+   - Do not set `SESSION_STRING`. The bot now authenticates from the current `BOT_TOKEN` on every boot so stale Telegram sessions cannot swallow `/start` and `/admin` updates.
 3. Link your GitHub repository in the **Deploy** tab.
 4. Deploy the main branch.
 5. In **Resources** tab, disable the web dyno and **enable the worker dyno** (`python bot.py`).
 
 *Note: A default, public pair of Telegram API ID/Hash credentials is built into the code so you do not need to configure them unless you choose to override them.*
+
+### If `/start` or `/admin` does not respond
+
+1. Confirm the Heroku **worker** dyno is enabled and there is no web dyno running this bot.
+2. Confirm `BOT_TOKEN`, `OWNER_ID`, and `MONGO_DB_URI` are set in Heroku config vars.
+3. Remove any old `SESSION_STRING` config var if it exists.
+4. Restart the worker dyno after changing config vars.
 
 ---
 
